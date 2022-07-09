@@ -1,0 +1,123 @@
+---
+title: "Network3_ERGM"
+author: "Jingyi Sun"
+date: "10/2/2021"
+output: html_document
+---
+
+We will see how to use ERGM models to do SNA.
+
+The goal of ERGMs is to “describe parsimoniously the local selection forces that shape the global structure of a network” (Hunter et al. 2008).
+
+"Ergm has the capability of approximating a maximum likelihood estimator for an ERGM given a network data set; simulating new network data sets from a fitted ERGM using Markov chain Monte Carlo; and assessing how well a fitted ERGM does at capturing characteristics of a particular network data set." (Hunter et al. 2008).
+
+Let's first import packages.
+```{r}
+#install.packages("network")
+#install.packages("ergm")
+library(ergm)
+library(network)
+```
+
+Read our follower-followee edgelists and individual-level covariates.
+
+```{r}
+el=read.csv("follow_el.csv",header=F, stringsAsFactors = F)
+head(el)
+
+cov=read.csv("artists2.csv",stringsAsFactors = F)
+cov=cov[,-1]
+# make a variable of tenure
+cov$tenure=2021-cov$since
+head(cov)
+
+# to reduce modeling time, I only focus on older users with more than 1 year of tenure
+old=cov$author[cov$tenure>0]
+el=el[(el$V1 %in% old)&(el$V2 %in% old),]
+
+```
+
+Then we can buid the network and add node-level attributes.
+
+```{r}
+# build the network
+net=network(el,directed = T)
+plot(net)
+
+# get an ordered list of nodes from the network
+ordered=network.vertex.names(net)
+
+# subset the covariates and order in the same way as ordered nodelist from the network
+net_cov=cov[cov$author %in% ordered,]
+net_cov=net_cov[match(ordered,net_cov$author),]
+
+# set node attributes
+network::set.vertex.attribute(net, names(net_cov),net_cov)
+table(network::get.vertex.attribute(net,attrname = "tenure"))
+```
+
+Let's model this network one step at a time.
+For a list of ergm terms, check here: https://rdrr.io/cran/ergm/man/ergm-terms.html
+
+Edges MUST be included. 
+
+First we add in the mechanism of reciprocity. 
+
+```{r}
+fit=ergm(net~ edges 
+              +mutual
+              ,control=control.ergm(MCMC.samplesize=5000,MCMLE.maxit=500))
+summary(fit)
+```
+```{r}
+# Does this model have satisfactory goodness of fit?
+mcmc.diagnostics(fit)
+gof <- gof(fit,control=control.gof.ergm(nsim=200)) 
+par(mfrow=c(3,2))
+plot(gof)
+
+# GOF is not good.
+```
+
+
+
+Second, we add the mechanism of preferential attachment.
+
+
+```{r}
+# ERGM degenerates VERY FREQUENTLY!
+
+fit=ergm(net~ edges 
+         +mutual
+         +idegree(1)
+         +gwidegree(0, fixed=TRUE)
+         ,control=control.ergm(MCMC.samplesize=5000,MCMLE.maxit=500
+                               ,MCMLE.density.guard.min = 100000,MCMLE.density.guard = exp(3),
+                               MCMC.burnin=100000, MCMC.interval=10000))
+summary(fit)
+```
+```{r}
+mcmc.diagnostics(fit)
+gof <- gof(fit,control=control.gof.ergm(nsim=200)) 
+par(mfrow=c(3,2))
+plot(gof)
+
+# GOF is better
+```
+Let's add the homophily effect of tenure. 
+
+
+```{r}
+
+fit=ergm(net~ edges 
+              +mutual
+              +idegree(1)
+              +gwidegree(0, fixed=TRUE)
+              +nodematch("tenure")
+              ,control=control.ergm(MCMC.samplesize=5000,MCMLE.maxit=500
+                     ,MCMLE.density.guard.min = 100000,MCMLE.density.guard = exp(3),
+                     MCMC.burnin=100000, MCMC.interval=10000))
+summary(fit)
+```
+
+
